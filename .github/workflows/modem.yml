@@ -1,0 +1,105 @@
+name: Dump Modem Partition to Branch
+
+on:
+  workflow_dispatch:
+    inputs:
+      dumper_tool:
+        description: 'Choose dumping tool'
+        required: true
+        default: "dumpyara"
+        type: choice
+        options:
+          - dumpyara
+          - dumprx
+
+      rom_url:
+        description: 'Direct ROM download link'
+        required: true
+
+jobs:
+  dump_modem:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip wget lz4 brotli erofs-utils android-sdk-libsparse-utils git
+
+          pip3 install dumpyara
+
+          if [ "${{ github.event.inputs.dumper_tool }}" == "dumprx" ]; then
+            git clone https://github.com/DumprX/DumprX.git
+            cd DumprX
+            chmod +x setup.sh
+            ./setup.sh
+            cd ..
+          fi
+
+      - name: Download ROM
+        run: |
+          mkdir rom
+          cd rom
+          wget -q --content-disposition "${{ github.event.inputs.rom_url }}"
+          echo "ROM downloaded"
+
+      - name: Dump ROM
+        run: |
+          mkdir dump
+
+          if [ "${{ github.event.inputs.dumper_tool }}" == "dumprx" ]; then
+            echo "[*] Using DumprX"
+            ./DumprX/dumper.sh "${{ github.event.inputs.rom_url }}"
+            cp -r DumprX/out/* dump/
+          else
+            echo "[*] Using dumpyara"
+            ROM_FILE=$(ls rom | head -n 1)
+            python3 -m dumpyara "rom/$ROM_FILE" -o dump
+          fi
+
+      - name: Extract ONLY modem partition
+        run: |
+          if [ ! -d "dump/modem" ]; then
+            echo "Modem partition not found!"
+            exit 1
+          fi
+
+          mkdir modem_only
+          cp -r dump/modem/* modem_only/
+
+      - name: Remove large files (>100MB)
+        run: |
+          find modem_only -type f -size +100M -delete
+
+      - name: Prepare repo content
+        run: |
+          # Move the extracted modem folder to the parent directory (outside workspace)
+          mv modem_only ../modem_temp
+          
+          # Clean the current workspace entirely (including hidden .git files if necessary)
+          # We keep .git so we don't lose the repository context
+          find . -maxdepth 1 ! -name '.git' ! -name '.' -exec rm -rf {} +
+          
+          # Move the modem data back into the root
+          mv ../modem_temp ./modem
+
+      - name: Commit and push to dated branch
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
+
+          # Create branch with date + time
+          BRANCH="modem-$(date +'%Y-%m-%d-%H%M')"
+          echo "Branch: $BRANCH"
+
+          git checkout -b $BRANCH
+
+          git add modem
+          git commit -m "Modem dump on $(date)" || echo "No changes"
+
+          git push origin $BRANCH
