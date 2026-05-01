@@ -78,8 +78,15 @@ jobs:
 
       - name: Prepare repo content
         run: |
-          rm -rf *
-          mv vendor_only vendor
+          # Move the extracted vendor folder to the parent directory (outside workspace)
+          mv vendor_only ../vendor_temp
+          
+          # Clean the current workspace entirely (including hidden .git files if necessary)
+          # We keep .git so we don't lose the repository context
+          find . -maxdepth 1 ! -name '.git' ! -name '.' -exec rm -rf {} +
+          
+          # Move the vendor data back into the root
+          mv ../vendor_temp ./vendor
 
       - name: Commit and push to dated branch
         run: |
